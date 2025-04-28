@@ -4,8 +4,12 @@ import shlex
 import re
 from urllib.parse import urlparse
 import os 
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 
 mcp = FastMCP("curl-mcp")
+console = Console()
 
 # --- Helper Function for Sanitization (Example) ---
 def sanitize_filename(filename: str) -> str:
@@ -402,32 +406,24 @@ def execute_curl(options: dict, url: str) -> dict:
         return result_info
 
 if __name__ == "__main__":
-    # Example usage for testing locally (optional)
-    # test_instruction = "get headers for google.com with user agent chrome and save to google_headers.txt"
-    # test_instruction = "post json {'id': 1, 'name':'test'} to https://httpbin.org/post with user admin pass secret and ignore ssl errors"
-    # test_instruction = "upload form field 'upload' with file 'my_document.pdf' to upload.example.com"
-    # test_instruction = "curl https://expired.badssl.com/ ignore ssl"
-    # test_instruction = "get http://httpbin.org/delay/5 with a timeout of 3 seconds"
-
-    # parsed = parse_instruction(test_instruction)
-    # print("--- Parsed Data ---")
-    # import json
-    # print(json.dumps(parsed, indent=2))
-
-    # if not parsed.get("error"):
-    #      options_disp = parsed.get("display_options", parsed["options"])
-    #      cmd_str = " ".join(build_curl_command_list(options_disp, parsed["url"]))
-    #      print("\n--- Command String (Display) ---")
-    #      print(cmd_str)
-
-    #      print("\n--- Execution Result ---")
-    #      result = execute_curl(parsed["options"], parsed["url"])
-    #      print(json.dumps(result, indent=2))
-
-    #      if result.get("error"):
-    #           print(f"\nFormatted Error Output:\nFailed Command: {cmd_str}\n\nError:\n{result['error']}\nOutput:\n{result.get('output', '')}")
-    #      else:
-    #           print(f"\nFormatted Success Output:\nCommand executed: {cmd_str}\n\nResult:\n{result.get('output', '')}")
-
-    # Run the MCP server
-    mcp.run(transport="stdio")
+    # Create welcome banner
+    title = Text("Curl MCP Service", style="bold magenta")
+    subtitle = Text("Natural Language Curl Command Interface", style="cyan")
+    
+    # Show startup banner
+    console.print(Panel.fit(
+        f"{title}\n{subtitle}",
+        border_style="bright_blue",
+        padding=(1, 2)
+    ))
+    
+    try:
+        console.print("[green]Starting MCP service...[/]")
+        mcp.run(transport="stdio")
+        console.print("[green]Service running. Press Ctrl+C to stop.[/]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Shutting down service...[/]")
+        exit(0)
+    except Exception as e:
+        console.print(f"[red]Error starting service: {str(e)}[/]")
+        exit(1)
