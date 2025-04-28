@@ -56,10 +56,8 @@ Note: Replace `/path/to/your/curl-mcp` with the actual path where you cloned the
 
 ## Usage
 
-1. Start the MCP server using either:
+1. Start the MCP server:
 ```bash
-./curl-mcp.sh
-# or
 python3 main.py
 ```
 
