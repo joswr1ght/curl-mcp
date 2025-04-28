@@ -1,13 +1,11 @@
 # Curl MCP - Natural Language Curl Commander
 
-Execute curl commands using natural language in English.
+Execute curl commands using natural language in English and Spanish.
 
 ## Prerequisites
 
 - Python 3.13 or higher
-- curl installed on the system
-  - On Windows: You can download curl from https://curl.se/windows/ or install it via winget
-  - On Linux: Usually pre-installed, or install via your package manager
+- curl (usually pre-installed on Linux)
 - Git
 
 ## Installation
@@ -18,15 +16,10 @@ git clone https://github.com/MartinPSDev/curl-mcp.git
 cd curl-mcp
 ```
 
-2. Create and activate a virtual environment (recommended):
+2. Create and activate a virtual environment:
 ```bash
-# On Windows:
-python -m venv .venv
-.venv\Scripts\activate
-
-# On Linux/macOS:
-python -m venv .venv
-source .venv/bin/activate
+python3 -m venv .env
+source .env/bin/activate
 ```
 
 3. Install dependencies:
@@ -34,26 +27,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Configuration
-
-1. To use this MCP server in your development environment (VSCode, Cursor, Claude Desktop, etc.), you need to add the following configuration to your MCP settings:
-
-For Windows:
-```json
-{
-    "mcpServers": {
-        "curl-mcp": {
-            "command": "python",
-            "args": [
-                "C:\\path\\to\\your\\curl-mcp\\main.py"
-            ],
-            "env": {}
-        }
-    }
-}
+4. Make the launcher script executable:
+```bash
+chmod +x curl-mcp.sh
 ```
 
-For Linux/macOS:
+## Configuration
+
+To use this MCP server in your development environment (VSCode, Cursor, Claude Desktop, etc.), add the following configuration to your MCP settings:
+
 ```json
 {
     "mcpServers": {
@@ -62,27 +44,47 @@ For Linux/macOS:
             "args": [
                 "/path/to/your/curl-mcp/main.py"
             ],
-            "env": {}
+            "env": {
+                "PYTHONPATH": "/path/to/your/curl-mcp/.env/lib/python3.11/site-packages"
+            }
         }
     }
 }
 ```
 
-Note: Replace the path in the `args` section with the actual path where you cloned the repository, using the appropriate path format for your operating system.
-
-2. The MCP server is now ready to use with your preferred development environment.
+Note: Replace `/path/to/your/curl-mcp` with the actual path where you cloned the repository.
 
 ## Usage
 
-1. Start the MCP server:
+1. Start the MCP server using either:
 ```bash
-# On any platform:
-python main.py
+./curl-mcp.sh
+# or
+python3 main.py
 ```
 
-2. The server can now receive natural language commands. Here are some examples:
+2. The server can now receive natural language commands in English or Spanish. Here are some examples:
 
-### Examples:
-- "Make a POST request to https://example.com/api with data name=John and age=25"
-- "Download https://example.com and save it as page.html"
-- "Make a GET request to https://api.example.com/data and show the headers"
+### Basic Examples:
+- "Get headers from https://example.com"
+- "Show raw response from https://api.example.com"
+- "Download https://example.com and save as page.html"
+
+### Advanced Examples:
+- Headers and Authentication:
+  - "Make a request to https://api.example.com with header Authorization: Bearer mytoken"
+  - "Get https://api.example.com using basic auth user:password"
+
+- Data Handling:
+  - "POST to https://api.example.com/users with data name=John and age=25"
+  - "Send form data to https://upload.example.com with file image.jpg"
+  - "POST urlencoded data user=test+name to https://api.example.com"
+
+- Security and Options:
+  - "Get https://example.com ignoring SSL verification"
+  - "Request https://api.example.com with timeout 30 seconds"
+  - "Get https://example.com through proxy localhost:8080"
+
+- User Agents:
+  - "Get https://example.com as Chrome"
+  - "Request https://mobile.example.com as iPhone"
