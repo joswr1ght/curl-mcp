@@ -23,8 +23,8 @@ async def curl(instruction: str) -> str:
     # Add common options that should be enabled by default
     # -L to follow redirects automatically
     curl_options["options"]["-L"] = True
-    # -i to include headers in the output (unless otherwise specified)
-    if not any(opt in curl_options["options"] for opt in ["-I", "-i", "--head"]):
+    # Only add -i if we're not doing a HEAD request (-I/--head)
+    if not any(opt in curl_options["options"] for opt in ["-I", "--head"]):
         curl_options["options"]["-i"] = True
     
     # Execute the parsed curl command
@@ -99,8 +99,17 @@ def parse_instruction(instruction: str) -> dict:
             # Default to Chrome if no specific agent requested
             curl_options["options"]["-A"] = user_agents["chrome"]
     
-    # Always add headers if mentioned, without asking questions
-    if re.search(r'(?:headers|header|encabezado|cabecera)', instruction, re.IGNORECASE) and "-I" not in curl_options["options"]:
+    # Detect if user wants headers only - Now with Spanish support
+    headers_only_pattern = re.search(r'(?:solo|solamente|only|just)\s+(?:headers|header|encabezado|cabecera|encabezados|cabeceras)', instruction, re.IGNORECASE)
+    headers_pattern = re.search(r'(?:headers|header|encabezado|cabecera|encabezados|cabeceras)', instruction, re.IGNORECASE)
+    
+    if headers_only_pattern:
+        # Use -I for headers-only request
+        curl_options["options"]["-I"] = True
+        # Remove -i if it was previously set
+        curl_options["options"].pop("-i", None)
+    elif headers_pattern and "-I" not in curl_options["options"]:
+        # Use -i to include headers with body
         curl_options["options"]["-i"] = True
     
     # Output to file if mentioned
