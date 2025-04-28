@@ -94,19 +94,17 @@ def parse_instruction(instruction: str) -> dict:
             # Default to Chrome if no specific agent requested
             curl_options["options"]["-A"] = user_agents["chrome"]
     
-    # Detect if user wants headers only - Now with Spanish support
+    # Simplify header detection logic
     headers_only_pattern = re.search(r'(?:solo|solamente|only|just)\s+(?:headers|header|encabezado|cabecera|encabezados|cabeceras)', instruction, re.IGNORECASE)
-    headers_pattern = re.search(r'(?:headers|header|encabezado|cabecera|encabezados|cabeceras)', instruction, re.IGNORECASE)
     
     if headers_only_pattern:
-        # Use -I for headers-only request
+        # Use -I for headers-only request and ensure -i is not set
         curl_options["options"]["-I"] = True
-        # Remove -i if it was previously set
         curl_options["options"].pop("-i", None)
-    elif headers_pattern and "-I" not in curl_options["options"]:
-        # Use -i to include headers with body
-        curl_options["options"]["-i"] = True
-    
+    else:
+        # For normal requests, don't add any header flags
+        curl_options["options"].pop("-I", None)
+        curl_options["options"].pop("-i", None)
     
     if re.search(r'(?:save|guardar|salvar|file|archivo)', instruction, re.IGNORECASE):
         file_match = re.search(r'(?:as|como|to|en)[:\s]+([^\s"\'<>,]+\.[\w]+)', instruction, re.IGNORECASE)
@@ -157,43 +155,16 @@ def execute_curl(curl_options: dict) -> str:
             check=False
         )
         
-        # Always return both stdout and stderr, regardless of return code
         output = []
         if result.stdout:
-            output.append(f"Output:\n{result.stdout}")
+            output.append(result.stdout)
         if result.stderr:
-            output.append(f"Error output:\n{result.stderr}")
-        if result.returncode != 0:
-            output.append(f"Exit code: {result.returncode}")
-            
-            
-            if len(curl_options["options"]) > 0:
-                simple_options = {}
-                if "-X" in curl_options["options"]:
-                    simple_options["-X"] = curl_options["options"]["-X"]
-                
-                simple_curl_command = ["curl"]
-                for option, value in simple_options.items():
-                    simple_curl_command.append(option)
-                    simple_curl_command.append(str(value))
-                simple_curl_command.append(curl_options["url"])
-                
-                retry_result = subprocess.run(
-                    simple_curl_command,
-                    capture_output=True,
-                    text=True,
-                    check=False
-                )
-                
-                if retry_result.returncode == 0:
-                    output.append("\nRetry with simplified command succeeded:")
-                    if retry_result.stdout:
-                        output.append(retry_result.stdout)
+            output.append(f"Error: {result.stderr}")
         
         return "\n".join(output)
         
     except Exception as e:
-        return f"Exception occurred: {str(e)}"
+        return f"Error: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")
