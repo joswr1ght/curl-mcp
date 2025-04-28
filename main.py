@@ -211,90 +211,64 @@ def parse_instruction(instruction: str) -> dict:
 
 def execute_curl(curl_options: dict) -> str:
     """Execute the curl command with the parsed options."""
-    
-    # Check if parsing failed before trying to execute
-    if curl_options.get("command_string", "").startswith("Error parsing instruction:"):
-        return curl_options["command_string"]
-        
-    if not curl_options["url"]:
-        return "Error executing curl: No URL was provided or extracted."
-
     try:
         curl_command = curl_options["base_command"].copy()
         
-        # Add options correctly, handling lists (e.g., multiple -H)
+        # For header requests, first check without following redirects
+        if "-I" in curl_options["options"]:
+            # Remove -L if present for initial request
+            curl_options["options"].pop("-L", None)
+            
+            # Execute initial request
+            initial_command = curl_command + ["-I", curl_options["url"]]
+            result = subprocess.run(
+                initial_command,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            # Check for redirect in headers
+            if result.stdout and any(code in result.stdout for code in ["301", "302", "307", "308"]):
+                location = None
+                for line in result.stdout.splitlines():
+                    if line.lower().startswith("location:"):
+                        location = line.split(":", 1)[1].strip()
+                        break
+                
+                if location:
+                    return (f"Received redirect to: {location}\n\n"
+                           f"Initial headers:\n{result.stdout}\n\n"
+                           f"To follow redirect, add '-L' to your request.")
+            
+            return result.stdout if result.stdout else result.stderr
+            
+        # For non-header requests, proceed as normal
         for option, value in curl_options["options"].items():
             if isinstance(value, list):
                 for item in value:
                     curl_command.append(option)
-                    if item is not True: # Should not happen for lists based on current parsing
+                    if item is not True:
                         curl_command.append(str(item))
-            elif value is True: # Boolean flags like -L, -I, -v
+            elif value is True:
                 curl_command.append(option)
-            else: # Single value options like -X, -d, -o, -A
+            else:
                 curl_command.append(option)
                 curl_command.append(str(value))
         
-        # Add URL at the end
         curl_command.append(curl_options["url"])
         
-        # Add silent flag (-s) by default UNLESS verbose (-v) is requested
-        if "-v" not in curl_options["options"]:
-            # Check if -s is already present (unlikely but possible)
-            if "-s" not in curl_command:
-                 # Insert -s after 'curl' for clarity, though position often doesn't matter
-                 curl_command.insert(1, "-s")
-
-        print(f"Executing command list: {curl_command}") # For debugging server-side
-
         result = subprocess.run(
             curl_command,
             capture_output=True,
             text=True,
-            check=False, # Don't raise exception on non-zero exit code
-            timeout=30 # Add a timeout (e.g., 30 seconds) to prevent hanging indefinitely
+            check=False
         )
         
-        print(f"Curl exit code: {result.returncode}") # Log exit code
-        # print(f"Curl stdout: {result.stdout[:500]}...") # Log some output
-        # print(f"Curl stderr: {result.stderr[:500]}...") # Log some error output
-
-        # Combine stdout and stderr for more context, especially if check=False
-        output = ""
-        if result.stdout:
-            output += result.stdout
-        if result.stderr:
-            # Prepend stderr with a marker if stdout also exists
-            if result.stdout:
-                 output += f"\n--- Errors/Warnings ---\n{result.stderr}"
-            else:
-                 # If only stderr exists, it's likely the main result (an error message)
-                 output += result.stderr
-
-        # Check return code for a clearer error message if needed
-        if result.returncode != 0 and not output:
-             output = f"Curl command failed with exit code {result.returncode} but produced no output."
-        elif result.returncode != 0 and result.stderr:
-             # Error message is already in stderr, potentially add context
-             # output = f"Curl Error (Exit Code {result.returncode}):\n{output}" # Optional: prepend context
-             pass # Error message likely already captured
-        elif not output:
-             output = "Command executed successfully but produced no output."
-
-
-        return output.strip() # Return combined output, stripped of whitespace
-            
-    except subprocess.TimeoutExpired:
-         return f"Error executing curl: Command timed out after 30 seconds. Command: {' '.join(curl_command)}"
-    except FileNotFoundError:
-         return "Error executing curl: 'curl' command not found. Is curl installed and in the system PATH?"
+        return result.stdout if result.stdout else result.stderr
+        
     except Exception as e:
-        # Try to build command string even if execution failed, for error reporting
-        try:
-             cmd_str = ' '.join(curl_command)
-        except:
-             cmd_str = curl_options.get('command_string', 'N/A')
-        return f"Error executing curl: {str(e)}. Command: {cmd_str}"
+        return f"Error: {str(e)}"
 
 
 if __name__ == "__main__":
