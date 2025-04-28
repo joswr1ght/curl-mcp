@@ -214,50 +214,40 @@ def execute_curl(curl_options: dict) -> str:
     try:
         curl_command = curl_options["base_command"].copy()
         
-        # For header requests, first check without following redirects
+        # Build command with options
+        for option, value in curl_options["options"].items():
+            curl_command.append(option)
+            if value is not True:
+                curl_command.append(str(value))
+        
+        curl_command.append(curl_options["url"])
+        
+        # First request - without following redirects
         if "-I" in curl_options["options"]:
-            # Remove -L if present for initial request
-            curl_options["options"].pop("-L", None)
-            
-            # Execute initial request
-            initial_command = curl_command + ["-I", curl_options["url"]]
             result = subprocess.run(
-                initial_command,
+                curl_command,
                 capture_output=True,
                 text=True,
                 check=False
             )
             
-            # Check for redirect in headers
-            if result.stdout and any(code in result.stdout for code in ["301", "302", "307", "308"]):
-                location = None
-                for line in result.stdout.splitlines():
-                    if line.lower().startswith("location:"):
-                        location = line.split(":", 1)[1].strip()
-                        break
-                
-                if location:
-                    return (f"Received redirect to: {location}\n\n"
-                           f"Initial headers:\n{result.stdout}\n\n"
-                           f"To follow redirect, add '-L' to your request.")
-            
-            return result.stdout if result.stdout else result.stderr
-            
-        # For non-header requests, proceed as normal
-        for option, value in curl_options["options"].items():
-            if isinstance(value, list):
-                for item in value:
-                    curl_command.append(option)
-                    if item is not True:
-                        curl_command.append(str(item))
-            elif value is True:
-                curl_command.append(option)
-            else:
-                curl_command.append(option)
-                curl_command.append(str(value))
+            if result.stdout:
+                # Check for redirect
+                if any(code in result.stdout for code in ["301", "302", "307", "308"]):
+                    location = None
+                    for line in result.stdout.splitlines():
+                        if line.lower().startswith("location:"):
+                            location = line.split(":", 1)[1].strip()
+                            break
+                    
+                    if location and "-L" not in curl_options["options"]:
+                        return (f"{result.stdout}\n"
+                               f"Found redirect to: {location}\n"
+                               f"Add -L to follow redirects.")
+                return result.stdout
+            return result.stderr
         
-        curl_command.append(curl_options["url"])
-        
+        # Non-header requests or requests with -L
         result = subprocess.run(
             curl_command,
             capture_output=True,
@@ -268,7 +258,7 @@ def execute_curl(curl_options: dict) -> str:
         return result.stdout if result.stdout else result.stderr
         
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error executing curl: {str(e)}"
 
 
 if __name__ == "__main__":
