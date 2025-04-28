@@ -1,0 +1,12 @@
+{
+    "mcpServers": {
+        "curl-mcp": {
+            "command": "/usr/bin/python3",
+            "args": [
+                "/home/kali/curl-mcp/main.py"
+            ],
+            "env": {}
+        }
+    }
+}
+
