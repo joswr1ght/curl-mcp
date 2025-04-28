@@ -1,347 +1,433 @@
 from mcp.server.fastmcp import FastMCP
 import subprocess
-import json
+import shlex 
 import re
-from urllib.parse import urlparse 
+from urllib.parse import urlparse
+import os 
 
 mcp = FastMCP("curl-mcp")
+
+# --- Helper Function for Sanitization (Example) ---
+def sanitize_filename(filename: str) -> str:
+    """Basic filename sanitization."""
+    # Remove potentially dangerous characters
+    filename = re.sub(r'[\\/*?:"<>|]', '_', filename)
+    # Prevent path traversal (optional, depends on desired behavior)
+    filename = os.path.basename(filename)
+    # Limit length (optional)
+    max_len = 200
+    if len(filename) > max_len:
+        base, ext = os.path.splitext(filename)
+        ext = ext[:max_len - len(base) - 1] # Truncate extension if needed
+        filename = base[:max_len - len(ext)] + ext
+    if not filename: # Handle empty filenames after sanitization
+        return "sanitized_output"
+    return filename
+
+# --- Helper Function for Building Command List ---
+def build_curl_command_list(options: dict, url: str) -> list:
+    """Builds the list of arguments for subprocess from options dict."""
+    command = ["curl"]
+    for option, value in options.items():
+        if isinstance(value, list): # Handle options that appear multiple times (e.g., -H)
+            for item in value:
+                command.append(option)
+                if item is not True: # Avoid adding 'True' for boolean flags used in lists (unlikely)
+                    command.append(str(item))
+        elif value is True: # Boolean flags (like -L, -I, -v, -k)
+            command.append(option)
+        elif value is not False: # Other options with single values (like -X, -d, -o, -A, -u, -m, -x)
+            command.append(option)
+            command.append(str(value))
+        # Ignore options explicitly set to False
+    command.append(url)
+    return command
+
 
 @mcp.tool()
 async def curl(instruction: str) -> str:
     """
     Execute a curl command based on natural language instructions.
-    
+
     Args:
         instruction: A natural language description of the curl request to make.
-        
-    Returns:
-        The output of the curl command and the actual command executed.
-    """
-    # Check if raw output is requested
-    raw_output = re.search(r'(?:raw|crudo|consola|terminal)', instruction, re.IGNORECASE)
-    
-    # Parse the natural language instruction
-    try:
-        curl_options = parse_instruction(instruction)
-        
-        # Execute the parsed curl command
-        result = execute_curl(curl_options)
-        
-        # Check if the result indicates an error happened during execution
-        if result.startswith("Error executing curl:") or result.startswith("Error parsing instruction:"):
-             return f"Failed Command: {curl_options.get('command_string', 'N/A')}\n\n{result}"
 
+    Returns:
+        The output of the curl command execution status and results.
+    """
+    raw_output = re.search(r'\b(raw|crudo|consola|terminal)\b', instruction, re.IGNORECASE)
+
+    try:
+        curl_options_data = parse_instruction(instruction)
+
+        # Check if parsing itself returned an error message
+        if curl_options_data.get("error"):
+            return f"Error parsing instruction: {curl_options_data['error']}\nInstruction: {instruction}"
+
+        # Use display_options for the command string shown to the user
+        options_for_display = curl_options_data.get("display_options", curl_options_data["options"])
+        command_string_display = " ".join(build_curl_command_list(options_for_display, curl_options_data["url"]))
+
+
+        # Execute the parsed curl command using the real options
+        execution_result = execute_curl(curl_options_data["options"], curl_options_data["url"])
+
+        # Combine command display with execution result
         if raw_output:
-            return result
+            # Even in raw mode, show command if execution failed
+            if execution_result.get("error"):
+                 return f"Failed Command: {command_string_display}\n\nError:\n{execution_result['error']}\nOutput:\n{execution_result.get('output', '')}"
+            else:
+                 return execution_result.get('output', '') # Return only output on success
         else:
-            # Ensure command_string is available even if parsing failed partially
-            cmd_str = curl_options.get('command_string', 'Could not generate command string.')
-            return f"Command executed: {cmd_str}\n\nResult:\n{result}"
+            if execution_result.get("error"):
+                 # Prioritize specific execution error over generic message
+                 error_msg = execution_result['error']
+                 output_msg = execution_result.get('output', '') # Include any partial output
+                 return f"Failed Command: {command_string_display}\n\nError:\n{error_msg}\nOutput:\n{output_msg}"
+            else:
+                 output_msg = execution_result.get('output', 'No output received.')
+                 return f"Command executed: {command_string_display}\n\nResult:\n{output_msg}"
 
     except Exception as e:
-         # Catch potential errors during parsing itself
-         return f"Error processing instruction: {str(e)}"
+         # Catch unexpected errors during the whole process
+         # Log the full error for debugging
+         print(f"Unexpected error processing instruction: {instruction}\nError: {e}")
+         # Provide a user-friendly message
+         return f"Unexpected error processing instruction. Please check logs or try rephrasing. Error: {str(e)}"
 
 
 def parse_instruction(instruction: str) -> dict:
     """Parse a natural language instruction into curl command options."""
-    curl_options = {
-        "base_command": ["curl"],
+    result_data = {
         "url": "",
         "options": {},
-        "command_string": "" # Initialize command_string
+        "display_options": None, # Will be created if masking is needed
+        "error": None
     }
-    
+    options = result_data["options"] # Shortcut
+
     try:
-        # Extract URL - be more aggressive in finding URLs
+        # 1. Extract URL (More robustly)
+        #    Prioritize explicit URLs, then keywords, then generic domain-like patterns.
         url_patterns = [
-            r'https?://[^\s"\'<>]+',  # Standard URL
-            r'(?:site|sitio|website|web|url)[:\s]+([^\s"\'<>,]+)', # Site: example.com
-            r'(?:to|a)[:\s]+([^\s"\'<>,]+\.[a-z]{2,})' # to: example.com
+            r'https?://[^\s"\'<>]+',                      # Full URL (highest priority)
+            r'(?:url|uri|site|sitio|endpoint|address)\s*[:=]?\s*\'?("?)(https?://[^\s"\'<>]+)\1\'?', # url: https://...
+            r'(?:url|uri|site|sitio|endpoint|address)\s*[:=]?\s*\'?("?)([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^\s"\'<>]*)\1\'?', # url: example.com/path
+            r'\bto\s+([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^\s"\'<>]*)\b', # request to example.com
+            r'\b(?:on|at|for)\s+([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^\s"\'<>]*)\b', # get headers for example.com
+            r'\b([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b'          # Bare domain (lowest priority)
         ]
-        
         extracted_url = None
-        for pattern in url_patterns:
-            url_match = re.search(pattern, instruction, re.IGNORECASE) # Ignore case here too
+        for i, pattern in enumerate(url_patterns):
+            url_match = re.search(pattern, instruction, re.IGNORECASE)
             if url_match:
-                # Prefer group 1 if it exists (for patterns like 'site: example.com')
-                url = url_match.group(1) if len(url_match.groups()) > 0 and url_match.group(1) else url_match.group(0)
-                url = url.strip('.,:;"\'') # Clean trailing punctuation
-                # Add http:// if no protocol is specified
+                # Find the right group (usually the last one with content)
+                url = next((g for g in reversed(url_match.groups()) if g), url_match.group(0))
+                url = url.strip('.,:;"\'') # Clean surrounding punctuation
+
+                # Add http:// if no protocol is specified (check must be case-insensitive)
                 if not re.match(r'^https?://', url, re.IGNORECASE):
-                    url = 'http://' + url
+                    # Avoid adding http:// if it looks like a filename for -d @filename or -F name=@filename
+                    if not (url.startswith('@') or '=' in url): # Basic check, might need refinement
+                         url = 'http://' + url
+
                 extracted_url = url
-                break # Stop after first match
+                # Maybe remove the matched URL part from instruction to avoid re-parsing? (Careful)
+                # instruction = instruction[:url_match.start()] + instruction[url_match.end():]
+                break # Stop after first match (patterns ordered by priority)
 
         if not extracted_url:
-             # Fallback: Try to find something that looks like a domain name if no explicit URL found
-             domain_match = re.search(r'([\w-]+\.[\w.-]+)', instruction)
-             if domain_match:
-                  url = domain_match.group(1)
-                  if not re.match(r'^https?://', url, re.IGNORECASE):
-                      url = 'http://' + url
-                  extracted_url = url
+            result_data["error"] = "Could not extract a valid URL."
+            return result_data
+        result_data["url"] = extracted_url
 
-        if not extracted_url:
-            raise ValueError("Could not extract a valid URL from the instruction.") # Raise error if no URL
+        # 2. Detect Method (HEAD, POST, PUT, DELETE) - Default GET
+        # Use \b for word boundaries to avoid matching 'posting' as POST
+        if re.search(r'\b(head|headers?|cabeceras?|encabezados?)\b', instruction, re.IGNORECASE) and \
+           re.search(r'\b(only|just|solo|solamente|show|mostrar|obtener|get)\b', instruction, re.IGNORECASE):
+             options["-I"] = True
+        elif re.search(r'\bpost\b|\benví[ao](r)?\b|\bsubmit\b|\bsend\b', instruction, re.IGNORECASE):
+            options["-X"] = "POST"
+        elif re.search(r'\bput\b|\bactualiz[ao](r)?\b|\bupdate\b', instruction, re.IGNORECASE):
+            options["-X"] = "PUT"
+        elif re.search(r'\bdelete\b|\belimin[ao](r)?\b|\bremove\b', instruction, re.IGNORECASE):
+            options["-X"] = "DELETE"
+        elif re.search(r'\boptions\b', instruction, re.IGNORECASE):
+            options["-X"] = "OPTIONS"
+        elif re.search(r'\bpatch\b|\bparch[ea](r)?\b', instruction, re.IGNORECASE):
+            options["-X"] = "PATCH"
+        # GET is the default if no method specified and not -I
 
-        curl_options["url"] = extracted_url
+        # 3. Follow Redirects (-L) - Default ON unless HEAD or explicitly disabled
+        if " -I" not in options and not re.search(r'\b(no|not|sin)\s+(follow|seguir)\s+redirects?', instruction, re.IGNORECASE):
+            options["-L"] = True
+        elif re.search(r'\b(follow|seguir)\s+redirects?', instruction, re.IGNORECASE):
+             options["-L"] = True # Explicitly enable if requested
 
-        # --- Method and Header Logic ---
-        is_head_request = False
-        if re.search(r'\bhead\b|encabezado|cabecera', instruction, re.IGNORECASE):
-             is_head_request = True
-        if re.search(r'(?:solo|solamente|only|just)\s+(?:headers|header|encabezado|cabecera|encabezados|cabeceras)', instruction, re.IGNORECASE):
-             is_head_request = True
 
-        if is_head_request:
-            curl_options["options"]["-I"] = True
-            # Generally, don't follow redirects with HEAD, but could be made optional
-            # curl_options["options"]["-L"] = False # Explicitly disable redirect following for HEAD?
+        # 4. Data Handling (-d, -d @file, --data-urlencode, -F) - Prioritize specific forms
+        data_payload = None
+        content_type_json = False
+
+        # 4a. Form data (-F) - Higher priority
+        form_match = re.search(r'(?:form|formulario)\s+(?:field|campo)\s+(["\']?)([^"\']+)\1\s+(?:with|con)\s+(?:file|archivo)\s+(["\']?)([^"\']+)\3', instruction, re.IGNORECASE)
+        if form_match:
+            field_name = form_match.group(2)
+            file_path = form_match.group(4) # Needs validation/sanitization if path allowed
+            options["-F"] = f"{field_name}=@{file_path}"
         else:
-             # Set method if not HEAD
-            if re.search(r'post|POST|envía|enviar|send|submit', instruction, re.IGNORECASE):
-                curl_options["options"]["-X"] = "POST"
-            elif re.search(r'put|PUT|actualiza|actualizar|update', instruction, re.IGNORECASE):
-                curl_options["options"]["-X"] = "PUT"
-            elif re.search(r'delete|DELETE|elimina|eliminar|remove', instruction, re.IGNORECASE):
-                curl_options["options"]["-X"] = "DELETE"
-            # Default to GET if no other method specified and not HEAD
-            
-            # Add -L (follow redirects) by default for non-HEAD requests
-            curl_options["options"]["-L"] = True
+             # 4b. Data from file (-d @file)
+             file_data_match = re.search(r'(?:data|datos)\s+(?:from|desde)\s+(?:file|archivo)\s+(["\']?)([^"\']+)\1', instruction, re.IGNORECASE)
+             if file_data_match:
+                 file_path = file_data_match.group(2) # Needs validation/sanitization
+                 options["-d"] = f"@{file_path}"
+             else:
+                 # 4c. URL Encoded data (--data-urlencode)
+                 urlencode_match = re.search(r'(?:urlencoded|encoded)\s+(?:data|datos)\s+(["\']?)(.+?)\1(?:\s|$)', instruction, re.IGNORECASE)
+                 if urlencode_match:
+                     # Use a non-greedy match for the data
+                     options["--data-urlencode"] = urlencode_match.group(2).strip()
+                 else:
+                     # 4d. Inline data (-d) - Lowest priority for data types
+                     # Look for explicit data keywords followed by quoted string or JSON structure
+                     inline_data_match = re.search(
+                         r'(?:data|datos|body|cuerpo|payload|json)\s*[:=]?\s*'
+                         r'(?:(["\'])(.*?)\1|(\{.*?\})|(\[.*?\]))', # Quoted string OR {json} OR [json_array]
+                         instruction, re.IGNORECASE | re.DOTALL # DOTALL for multiline JSON
+                     )
+                     if inline_data_match:
+                         # Extract data from the correct group
+                         data_payload = inline_data_match.group(2) or inline_data_match.group(3) or inline_data_match.group(4)
+                         data_payload = data_payload.strip()
+                         if data_payload:
+                             options["-d"] = data_payload
+                             # Check if it looks like JSON or was explicitly mentioned
+                             if inline_data_match.group(3) or inline_data_match.group(4) or \
+                                re.search(r'\bjson\b', inline_data_match.group(0) or '', re.IGNORECASE): # Check keyword near data
+                                 content_type_json = True
 
 
-        # Detect data to send with POST/PUT - Improved Regex (needs refinement)
-        # This regex is still basic. Consider more robust parsing if complex data is needed.
-        data_match = re.search(r'(?:(?:con|with|using)\s+(?:data|datos|body|cuerpo|payload)|data|datos|body|cuerpo)[:=\s]+(["\']?)(.+?)\1(?:\s|$)|\b(json|JSON)[:=\s]+(["\']?)(.+?)\4(?:\s|$)', instruction, re.IGNORECASE | re.DOTALL)
-        if data_match:
-            data = data_match.group(2) or data_match.group(5) # Get data from either pattern part
-            data = data.strip()
-            if data:
-                # If JSON keyword was used or data looks like JSON, add header
-                if (data_match.group(3) and data_match.group(3).lower() == 'json') or \
-                   (data.startswith('{') and data.endswith('}')) or \
-                   (data.startswith('[') and data.endswith(']')):
-                    # Handle multiple headers correctly
-                    if "-H" in curl_options["options"]:
-                         if isinstance(curl_options["options"]["-H"], list):
-                              curl_options["options"]["-H"].append("Content-Type: application/json")
-                         else: # Convert to list if it was a single string
-                              curl_options["options"]["-H"] = [curl_options["options"]["-H"], "Content-Type: application/json"]
-                    else:
-                         curl_options["options"]["-H"] = "Content-Type: application/json"
+        # 5. Headers (-H) - Detect multiple headers, including common ones
+        # Initialize headers list (crucial for append logic)
+        headers_list = []
 
-                # Handle multiple data fields correctly (though curl usually takes one -d, use --data-urlencode for multiple)
-                # This simplistic approach overwrites previous -d if multiple matches occur.
-                curl_options["options"]["-d"] = data
+        # Add Content-Type if JSON data was detected
+        if content_type_json:
+            headers_list.append("Content-Type: application/json")
 
-        # Enhanced data handling
-        data_patterns = [
-            (r'(?:datos|data|body)\s+desde\s+archivo\s+(["\']?)([^"\']+)\1', 'file'),
-            (r'(?:form|formulario)\s+(["\']?)([^"\']+)\1\s+(?:con|with)\s+archivo\s+(["\']?)([^"\']+)\3', 'form'),
-            (r'(?:urlencoded|encoded)\s+data\s+(["\']?)([^"\']+)\1', 'urlencoded')
-        ]
-        
-        for pattern, data_type in data_patterns:
-            data_match = re.search(pattern, instruction, re.IGNORECASE)
-            if data_match:
-                if data_type == 'file':
-                    curl_options["options"]["-d"] = f"@{data_match.group(2)}"
-                elif data_type == 'form':
-                    form_field = data_match.group(2)
-                    filename = data_match.group(4)
-                    curl_options["options"]["-F"] = f'{form_field}=@{filename}'
-                elif data_type == 'urlencoded':
-                    curl_options["options"]["--data-urlencode"] = data_match.group(2)
-                break
-        
-        # Detect user agent changes 
-        ua_match = re.search(r'(?:user\s*agent|agente\s*de\s*usuario|como|as)\s+(iphone|android|chrome|firefox|safari)', instruction, re.IGNORECASE)
+        # General Header Pattern
+        header_pattern = r'(?:header|cabecera|encabezado)\s*[:=]?\s*(["\']?)([\w-]+:\s*.*?)\1(?=[\s,\.]|$)' # Header: Value (non-greedy value)
+        for match in re.finditer(header_pattern, instruction, re.IGNORECASE):
+            header = match.group(2).strip()
+            if header not in headers_list: # Avoid duplicates
+                headers_list.append(header)
+
+        # Specific Header Patterns (like Authorization)
+        auth_header_match = re.search(r'(?:auth(?:orization)?|autorizaci[oó]n)\s*[:=]?\s*(["\']?)(\w+\s+[^"\']+?)\1', instruction, re.IGNORECASE)
+        if auth_header_match:
+            header = f"Authorization: {auth_header_match.group(2).strip()}"
+            if header not in headers_list:
+                headers_list.append(header)
+
+        bearer_match = re.search(r'(?:bearer|token)\s*[:=]?\s*(["\']?)([^"\']+?)\1', instruction, re.IGNORECASE)
+        if bearer_match and not any(h.lower().startswith("authorization:") for h in headers_list): # Avoid adding if already added via auth_header_match
+             header = f"Authorization: Bearer {bearer_match.group(2).strip()}"
+             if header not in headers_list:
+                 headers_list.append(header)
+
+        # Add detected headers to options (only if list is not empty)
+        if headers_list:
+            options["-H"] = headers_list
+
+
+        # 6. User Agent (-A)
+        ua_match = re.search(r'(?:user[-\s]*agent|agente\s*de\s*usuario|as|como)\s+["\']?(iphone|android|chrome|firefox|safari|bot|curl)[\'"]?', instruction, re.IGNORECASE)
+        custom_ua_match = re.search(r'(?:user[-\s]*agent|agente\s*de\s*usuario)\s*[:=]?\s*(["\'])(.+?)\1', instruction, re.IGNORECASE)
+
         if ua_match:
+            agent_key = ua_match.group(1).lower()
             user_agents = {
                 "iphone": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
                 "android": "Mozilla/5.0 (Linux; Android 10; SM-A205U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
                 "chrome": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
                 "firefox": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/112.0",
-                "safari": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15"
+                "safari": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15",
+                "bot": "Googlebot/2.1 (+http://www.google.com/bot.html)",
+                 "curl": f"curl/{subprocess.check_output(['curl', '--version']).decode().split()[1]}" # Get actual curl version
             }
-            agent_name = ua_match.group(1).lower()
-            curl_options["options"]["-A"] = user_agents.get(agent_name, user_agents["chrome"]) # Default to chrome if strange match
-        # else: No default user-agent unless explicitly requested? Or keep chrome default?
-        #     curl_options["options"]["-A"] = user_agents["chrome"] # Optional: uncomment to set default chrome always
+            options["-A"] = user_agents.get(agent_key, user_agents["chrome"]) # Default to Chrome if unknown keyword
+        elif custom_ua_match:
+            options["-A"] = custom_ua_match.group(2).strip()
 
-        # Detect save to file
-        if re.search(r'(?:save|guardar|salvar|file|archivo)\b', instruction, re.IGNORECASE):
-            file_match = re.search(r'(?:as|como|to|en|llamado|named)\s+([^\s"\'<>,]+(?:\.[\w]+)?)', instruction, re.IGNORECASE)
-            if file_match:
-                filename = file_match.group(1)
-                # Basic sanitization (replace potentially unsafe chars) - Needs more robust sanitization for security
-                filename = re.sub(r'[\\/*?:"<>|]', '_', filename)
-                curl_options["options"]["-o"] = filename
-            else:
-                # Default filename based on URL if available and no name specified
-                if curl_options["url"]:
-                    path = urlparse(curl_options["url"]).path
-                    # Basic filename extraction
-                    filename = path.split('/')[-1] if path and path != '/' else "output.html"
-                    filename = re.sub(r'[\\/*?:"<>|]', '_', filename) # Sanitize default name too
-                    if not filename: # Handle case where path ends in /
-                         filename = "output.html"
-                    curl_options["options"]["-o"] = filename
-                else:
-                     curl_options["options"]["-o"] = "output.file" # Fallback filename
+        # 7. Save to File (-o)
+        save_match = re.search(r'(?:save|guardar|salvar|write|escribir)\s+(?:to|en|as|como)\s+(?:file|archivo)?\s*["\']?([^"\']+)["\']?', instruction, re.IGNORECASE)
+        if save_match:
+             filename = save_match.group(1).strip()
+             options["-o"] = sanitize_filename(filename) # Sanitize the filename
+        elif re.search(r'\b(save|guardar|salvar|output|salida)\b', instruction, re.IGNORECASE): # Save without specific name
+            path = urlparse(result_data["url"]).path
+            filename = path.split('/')[-1] if path and path != '/' else "output.html"
+            if not filename: filename = "output.html"
+            options["-o"] = sanitize_filename(filename) # Sanitize default name too
 
-        # Detect verbose request
+
+        # 8. Verbose (-v)
         if re.search(r'\b(verbose|detallado|details|detalles)\b', instruction, re.IGNORECASE):
-            curl_options["options"]["-v"] = True
+            options["-v"] = True
 
-        # Enhanced header detection
-        header_patterns = [
-            r'(?:header|cabecera|encabezado)[:\s]+(["\']?)([\w-]+:\s*[^"\']+)\1',  # explicit headers
-            r'(?:auth(?:orization)?|autorización)[:\s]+(["\']?)(\w+\s+[^"\']+)\1',  # auth headers
-            r'(?:bearer|token)[:\s]+(["\']?)([^"\']+)\1'  # bearer tokens
-        ]
-        
-        for pattern in header_patterns:
-            header_matches = re.finditer(pattern, instruction, re.IGNORECASE)
-            for match in header_matches:
-                header_value = match.group(2).strip()
-                
-                # Handle special cases
-                if match.re.pattern == header_patterns[1]:  # auth header
-                    header_value = f"Authorization: {header_value}"
-                elif match.re.pattern == header_patterns[2]:  # bearer token
-                    header_value = f"Authorization: Bearer {header_value}"
-                
-                # Add to headers list
-                if "-H" in curl_options["options"]:
-                    if isinstance(curl_options["options"]["-H"], list):
-                        if header_value not in curl_options["options"]["-H"]:
-                            curl_options["options"]["-H"].append(header_value)
-                    else:
-                        curl_options["options"]["-H"] = [curl_options["options"]["-H"], header_value]
-                else:
-                    curl_options["options"]["-H"] = [header_value]
+        # 9. Silent (-s) - Can override verbose if specified
+        if re.search(r'\b(silent|silencioso|quiet|callado)\b', instruction, re.IGNORECASE):
+            options["-s"] = True
+            if "-v" in options: del options["-v"] # -s usually overrides -v
 
-        # Authentication detection
-        auth_patterns = [
-            r'(?:con|with|usando|use)\s+(?:usuario|user|login)\s+(["\']?)([^"\']+)\1\s+(?:y|and|con|with)\s+(?:password|contraseña|pass)\s+(["\']?)([^"\']+)\3',
-            r'(?:auth|authentication|autenticación)[:=\s]+(["\']?)([^:]+):([^"\']+)\1'
-        ]
-        
-        for pattern in auth_patterns:
-            auth_match = re.search(pattern, instruction, re.IGNORECASE)
-            if auth_match:
-                if len(auth_match.groups()) == 4:  # First pattern
-                    username, password = auth_match.group(2), auth_match.group(4)
-                else:  # Second pattern
-                    username, password = auth_match.group(6), auth_match.group(7)
-                
-                curl_options["options"]["-u"] = f"{username}:{password}"
-                # Mask sensitive info in command string
-                curl_options["display_options"] = curl_options["options"].copy()
-                curl_options["display_options"]["-u"] = f"{username}:****"
-                break
+        # 10. Include Headers in Output (-i)
+        if re.search(r'\b(include|incluir|show|mostrar|with)\s+headers\b', instruction, re.IGNORECASE) and "-I" not in options:
+             options["-i"] = True
 
-        # SSL and security options
-        if re.search(r'(?:ignora|ignore|skip|salta)\s+(?:ssl|certificado|certificate|verification)', instruction, re.IGNORECASE):
-            curl_options["options"]["-k"] = True
-        
-        # Timeout handling
-        timeout_match = re.search(r'(?:timeout|espera|límite)\s+(?:de\s+)?(\d+)\s*(?:s|seg|seconds|segundos)?', instruction, re.IGNORECASE)
+
+        # 11. Authentication (-u user:pass)
+        # Pattern 1: user X and password Y
+        auth_match1 = re.search(r'(?:user|usuario)\s+["\']?([^"\']+)["\']?\s+(?:and|y|with|con)\s+(?:password|pass|contraseña)\s+["\']?([^"\']+)["\']?', instruction, re.IGNORECASE)
+        # Pattern 2: auth user:pass
+        auth_match2 = re.search(r'(?:auth(?:entication)?|autenticaci[oó]n)\s*[:=]?\s*["\']?([^:"]+):([^"\']+)["\']?', instruction, re.IGNORECASE)
+
+        username, password = None, None
+        if auth_match1:
+            username, password = auth_match1.group(1), auth_match1.group(2)
+        elif auth_match2:
+            username, password = auth_match2.group(1), auth_match2.group(2) # Corrected group indices
+
+        if username and password:
+            options["-u"] = f"{username}:{password}"
+            # Create display_options ONLY if needed (i.e., auth found)
+            result_data["display_options"] = options.copy() # Start with a copy of real options
+            result_data["display_options"]["-u"] = f"{username}:********" # Mask password
+
+
+        # 12. Insecure SSL (-k)
+        if re.search(r'(?:insecure|unsafe|skip|salta(?:r)?|ignore|ignora(?:r)?)\s+(?:ssl|cert|verification|verificaci[oó]n)', instruction, re.IGNORECASE):
+            options["-k"] = True
+
+        # 13. Timeout (-m seconds)
+        timeout_match = re.search(r'(?:timeout|wait|espera|limit(?:e)?)\s*(?:of|de)?\s*(\d+)\s*(?:s|sec|segundos?)?', instruction, re.IGNORECASE)
         if timeout_match:
-            curl_options["options"]["-m"] = timeout_match.group(1)
+            options["-m"] = timeout_match.group(1)
 
-        # Proxy support
-        proxy_match = re.search(r'(?:proxy|través\s+de|through)\s+(["\']?)([^"\']+:\d+)\1', instruction, re.IGNORECASE)
+        # 14. Proxy (-x host:port)
+        proxy_match = re.search(r'(?:proxy|through|via|trav[eé]s\s+de)\s+["\']?([\w.-]+:\d+)["\']?', instruction, re.IGNORECASE)
         if proxy_match:
-            curl_options["options"]["-x"] = proxy_match.group(2)
+            options["-x"] = proxy_match.group(1)
 
-        # --- Build the command string for display ---
-        cmd_parts = curl_options["base_command"].copy()
-        # Handle multiple headers (-H) and potentially other multi-value options
-        for option, value in curl_options["options"].items():
-             if isinstance(value, list): # Handle list values (e.g., multiple -H)
-                  for item in value:
-                       cmd_parts.append(option)
-                       if item is not True:
-                            # Basic quoting for display if value has spaces
-                            cmd_parts.append(f'"{item}"' if ' ' in str(item) else str(item))
-             elif value is True: # Boolean flags (like -L, -I, -v)
-                  cmd_parts.append(option)
-             else: # Single value options (like -X, -d, -o, -A)
-                  cmd_parts.append(option)
-                  # Basic quoting for display if value has spaces
-                  cmd_parts.append(f'"{value}"' if ' ' in str(value) else str(value))
+        # --- Final check and return ---
+        return result_data
 
-        if curl_options["url"]:
-            cmd_parts.append(f'"{curl_options["url"]}"') # Quote URL for display
-        curl_options["command_string"] = " ".join(cmd_parts)
-        
-        return curl_options
-    
     except Exception as e:
-         # If parsing fails, return a structure indicating failure
-         curl_options["command_string"] = f"Error parsing instruction: {str(e)}"
-         # Optionally, return the partially parsed options or raise the exception
-         # For now, returning the dict with the error string
-         print(f"Error during parsing: {e}") # Log error server-side
-         # raise e # Or re-raise the exception
-         return curl_options # Return dictionary even on partial failure for error reporting
+         # Log the detailed error server-side
+         print(f"Error during parsing instruction: '{instruction}'\n{type(e).__name__}: {e}")
+         # Return a dictionary indicating failure
+         result_data["error"] = f"Internal error during parsing: {str(e)}"
+         return result_data
 
 
-def execute_curl(curl_options: dict) -> str:
-    """Execute the curl command with the parsed options."""
+def execute_curl(options: dict, url: str) -> dict:
+    """Execute the curl command with the parsed options and return structured result."""
+    result_info = {
+        "output": "",
+        "error": None,
+        "return_code": None
+    }
     try:
-        curl_command = curl_options["base_command"].copy()
-        
-        # Build command with options
-        for option, value in curl_options["options"].items():
-            curl_command.append(option)
-            if value is not True:
-                curl_command.append(str(value))
-        
-        curl_command.append(curl_options["url"])
-        
-        # First request - without following redirects
-        if "-I" in curl_options["options"]:
-            result = subprocess.run(
-                curl_command,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.stdout:
-                # Check for redirect
-                if any(code in result.stdout for code in ["301", "302", "307", "308"]):
-                    location = None
-                    for line in result.stdout.splitlines():
-                        if line.lower().startswith("location:"):
-                            location = line.split(":", 1)[1].strip()
-                            break
-                    
-                    if location and "-L" not in curl_options["options"]:
-                        return (f"{result.stdout}\n"
-                               f"Found redirect to: {location}\n"
-                               f"Add -L to follow redirects.")
-                return result.stdout
-            return result.stderr
-        
-        # Non-header requests or requests with -L
-        result = subprocess.run(
-            curl_command,
+        # Build command list using the helper
+        curl_command_list = build_curl_command_list(options, url)
+
+        # Execute the command
+        process = subprocess.run(
+            curl_command_list,
             capture_output=True,
             text=True,
-            check=False
+            check=False, # Don't raise exception on non-zero exit code
+            timeout=int(options.get("-m", 30)) + 5 # Set a process timeout slightly larger than curl's -m
         )
-        
-        return result.stdout if result.stdout else result.stderr
-        
-    except Exception as e:
-        return f"Error executing curl: {str(e)}"
 
+        result_info["return_code"] = process.returncode
+        result_info["output"] = process.stdout
+
+        # Handle errors - check return code first
+        if process.returncode != 0:
+            # Prepend stderr to stdout if there's an error message
+            error_output = process.stderr.strip()
+            if error_output:
+                 # Try to give a more specific error if possible
+                 if "Could not resolve host" in error_output:
+                      result_info["error"] = f"DNS Error: Could not resolve host '{urlparse(url).hostname}'."
+                 elif "Connection refused" in error_output:
+                      result_info["error"] = f"Connection Error: Connection refused by server."
+                 elif "timed out" in error_output:
+                      result_info["error"] = f"Timeout Error: The connection timed out."
+                 else:
+                      result_info["error"] = f"Curl Error (Exit Code {process.returncode}): {error_output}"
+                 # Append stderr to the main output for context
+                 result_info["output"] += f"\n--- STDERR ---\n{error_output}"
+            else:
+                result_info["error"] = f"Curl failed with exit code {process.returncode} (no stderr message)."
+
+        # Specific handling for HEAD (-I) redirects (informational, not an error)
+        elif "-I" in options and not options.get("-L", False): # If -I used and -L not explicitly requested
+            if any(f"HTTP/{v} 30" in process.stdout for v in ["1.0", "1.1", "2"]): # Check for 30x status codes
+                 location = None
+                 for line in process.stdout.splitlines():
+                     if line.lower().startswith("location:"):
+                         location = line.split(":", 1)[1].strip()
+                         break
+                 if location:
+                     # Append info message to the output, don't set as error
+                     result_info["output"] += f"\n--- Info ---\nRedirect detected to: {location}\n(Use '-L' or 'follow redirects' to follow)"
+
+        return result_info
+
+    except subprocess.TimeoutExpired:
+        result_info["error"] = f"Process Timeout: The curl command took too long to execute (exceeded timeout)."
+        result_info["return_code"] = -1 # Indicate timeout
+        return result_info
+    except FileNotFoundError:
+        result_info["error"] = "Execution Error: 'curl' command not found. Is curl installed and in the system's PATH?"
+        result_info["return_code"] = -1
+        return result_info
+    except Exception as e:
+        # Catch other potential errors during execution (e.g., invalid arguments passed somehow)
+        print(f"Error executing curl command: {curl_command_list}\n{type(e).__name__}: {e}")
+        result_info["error"] = f"Internal error during execution: {str(e)}"
+        result_info["return_code"] = -1
+        return result_info
 
 if __name__ == "__main__":
+    # Example usage for testing locally (optional)
+    # test_instruction = "get headers for google.com with user agent chrome and save to google_headers.txt"
+    # test_instruction = "post json {'id': 1, 'name':'test'} to https://httpbin.org/post with user admin pass secret and ignore ssl errors"
+    # test_instruction = "upload form field 'upload' with file 'my_document.pdf' to upload.example.com"
+    # test_instruction = "curl https://expired.badssl.com/ ignore ssl"
+    # test_instruction = "get http://httpbin.org/delay/5 with a timeout of 3 seconds"
+
+    # parsed = parse_instruction(test_instruction)
+    # print("--- Parsed Data ---")
+    # import json
+    # print(json.dumps(parsed, indent=2))
+
+    # if not parsed.get("error"):
+    #      options_disp = parsed.get("display_options", parsed["options"])
+    #      cmd_str = " ".join(build_curl_command_list(options_disp, parsed["url"]))
+    #      print("\n--- Command String (Display) ---")
+    #      print(cmd_str)
+
+    #      print("\n--- Execution Result ---")
+    #      result = execute_curl(parsed["options"], parsed["url"])
+    #      print(json.dumps(result, indent=2))
+
+    #      if result.get("error"):
+    #           print(f"\nFormatted Error Output:\nFailed Command: {cmd_str}\n\nError:\n{result['error']}\nOutput:\n{result.get('output', '')}")
+    #      else:
+    #           print(f"\nFormatted Success Output:\nCommand executed: {cmd_str}\n\nResult:\n{result.get('output', '')}")
+
+    # Run the MCP server
     mcp.run(transport="stdio")
