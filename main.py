@@ -148,6 +148,10 @@ def execute_curl(curl_options: dict) -> str:
         if curl_options["url"]:
             curl_command.append(curl_options["url"])
         
+        # Add silent flag to suppress progress meter
+        if "-I" not in curl_options["options"]:
+            curl_command.append("-s")
+        
         result = subprocess.run(
             curl_command,
             capture_output=True,
@@ -155,13 +159,13 @@ def execute_curl(curl_options: dict) -> str:
             check=False
         )
         
-        output = []
+        # Return raw output without processing
         if result.stdout:
-            output.append(result.stdout)
-        if result.stderr:
-            output.append(f"Error: {result.stderr}")
-        
-        return "\n".join(output)
+            return result.stdout
+        elif result.stderr:
+            return f"Error: {result.stderr}"
+        else:
+            return "No output received"
         
     except Exception as e:
         return f"Error: {str(e)}"
