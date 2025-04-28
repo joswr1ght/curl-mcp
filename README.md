@@ -1,59 +1,88 @@
 # Curl MCP - Natural Language Curl Commander
 
-Este proyecto permite ejecutar comandos curl usando lenguaje natural en español o inglés.
+Execute curl commands using natural language in English.
 
-## Requisitos Previos
+## Prerequisites
 
-- Python 3.13 o superior
-- curl instalado en el sistema
+- Python 3.13 or higher
+- curl installed on the system
+  - On Windows: You can download curl from https://curl.se/windows/ or install it via winget
+  - On Linux: Usually pre-installed, or install via your package manager
 - Git
 
-## Instalación
+## Installation
 
-1. Clonar el repositorio:
+1. Clone the repository:
 ```bash
-git clone [URL_DEL_REPOSITORIO]
+git clone https://github.com/MartinPSDev/curl-mcp.git
 cd curl-mcp
 ```
 
-2. Crear y activar un entorno virtual (recomendado):
+2. Create and activate a virtual environment (recommended):
 ```bash
+# On Windows:
 python -m venv .venv
-source .venv/bin/activate  # En Linux/macOS
-# o
-.venv\Scripts\activate     # En Windows
+.venv\Scripts\activate
+
+# On Linux/macOS:
+python -m venv .venv
+source .venv/bin/activate
 ```
 
-3. Instalar las dependencias:
+3. Install dependencies:
 ```bash
-pip install -e .
+pip install -r requirements.txt
 ```
 
-## Configuración
+## Configuration
 
-1. Copiar el archivo de configuración 
-```bash
-settings.json
+1. To use this MCP server in your development environment (VSCode, Cursor, Claude Desktop, etc.), you need to add the following configuration to your MCP settings:
+
+For Windows:
+```json
+{
+    "mcpServers": {
+        "curl-mcp": {
+            "command": "python",
+            "args": [
+                "C:\\path\\to\\your\\curl-mcp\\main.py"
+            ],
+            "env": {}
+        }
+    }
+}
 ```
 
-2. El servidor MCP ya está listo para usar.
+For Linux/macOS:
+```json
+{
+    "mcpServers": {
+        "curl-mcp": {
+            "command": "/usr/bin/python3",
+            "args": [
+                "/path/to/your/curl-mcp/main.py"
+            ],
+            "env": {}
+        }
+    }
+}
+```
 
-## Uso
+Note: Replace the path in the `args` section with the actual path where you cloned the repository, using the appropriate path format for your operating system.
 
-1. Iniciar el servidor MCP:
+2. The MCP server is now ready to use with your preferred development environment.
+
+## Usage
+
+1. Start the MCP server:
 ```bash
+# On any platform:
 python main.py
 ```
 
-2. El servidor ahora puede recibir comandos en lenguaje natural como:
-   - "Haz un POST a https://ejemplo.com/api con los datos nombre=Juan y edad=25"
-   - "Descarga la página https://ejemplo.com y guárdala como pagina.html"
-   - "Haz una petición GET a https://api.ejemplo.com/datos y muestra los headers"
+2. The server can now receive natural language commands. Here are some examples:
 
-## Ejemplos
-
-```text
-"Quiero que hagas un método POST al sitio https://sitioweb/login con los datos Jose Lopez y que cambies mi user agent al de un iPhone"
-"Descarga el archivo https://ejemplo.com/archivo.pdf y guárdalo como local.pdf"
-"Haz una petición GET a https://api.ejemplo.com mostrando los headers de respuesta"
-```
+### Examples:
+- "Make a POST request to https://example.com/api with data name=John and age=25"
+- "Download https://example.com and save it as page.html"
+- "Make a GET request to https://api.example.com/data and show the headers"
