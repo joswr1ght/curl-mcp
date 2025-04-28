@@ -176,6 +176,34 @@ def parse_instruction(instruction: str) -> dict:
         if re.search(r'\b(verbose|detallado|details|detalles)\b', instruction, re.IGNORECASE):
             curl_options["options"]["-v"] = True
 
+        # Enhanced header detection
+        header_patterns = [
+            r'(?:header|cabecera|encabezado)[:\s]+(["\']?)([\w-]+:\s*[^"\']+)\1',  # explicit headers
+            r'(?:auth(?:orization)?|autorización)[:\s]+(["\']?)(\w+\s+[^"\']+)\1',  # auth headers
+            r'(?:bearer|token)[:\s]+(["\']?)([^"\']+)\1'  # bearer tokens
+        ]
+        
+        for pattern in header_patterns:
+            header_matches = re.finditer(pattern, instruction, re.IGNORECASE)
+            for match in header_matches:
+                header_value = match.group(2).strip()
+                
+                # Handle special cases
+                if match.re.pattern == header_patterns[1]:  # auth header
+                    header_value = f"Authorization: {header_value}"
+                elif match.re.pattern == header_patterns[2]:  # bearer token
+                    header_value = f"Authorization: Bearer {header_value}"
+                
+                # Add to headers list
+                if "-H" in curl_options["options"]:
+                    if isinstance(curl_options["options"]["-H"], list):
+                        if header_value not in curl_options["options"]["-H"]:
+                            curl_options["options"]["-H"].append(header_value)
+                    else:
+                        curl_options["options"]["-H"] = [curl_options["options"]["-H"], header_value]
+                else:
+                    curl_options["options"]["-H"] = [header_value]
+
         # --- Build the command string for display ---
         cmd_parts = curl_options["base_command"].copy()
         # Handle multiple headers (-H) and potentially other multi-value options
