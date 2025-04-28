@@ -204,6 +204,26 @@ def parse_instruction(instruction: str) -> dict:
                 else:
                     curl_options["options"]["-H"] = [header_value]
 
+        # Authentication detection
+        auth_patterns = [
+            r'(?:con|with|usando|use)\s+(?:usuario|user|login)\s+(["\']?)([^"\']+)\1\s+(?:y|and|con|with)\s+(?:password|contraseña|pass)\s+(["\']?)([^"\']+)\3',
+            r'(?:auth|authentication|autenticación)[:=\s]+(["\']?)([^:]+):([^"\']+)\1'
+        ]
+        
+        for pattern in auth_patterns:
+            auth_match = re.search(pattern, instruction, re.IGNORECASE)
+            if auth_match:
+                if len(auth_match.groups()) == 4:  # First pattern
+                    username, password = auth_match.group(2), auth_match.group(4)
+                else:  # Second pattern
+                    username, password = auth_match.group(6), auth_match.group(7)
+                
+                curl_options["options"]["-u"] = f"{username}:{password}"
+                # Mask sensitive info in command string
+                curl_options["display_options"] = curl_options["options"].copy()
+                curl_options["display_options"]["-u"] = f"{username}:****"
+                break
+
         # --- Build the command string for display ---
         cmd_parts = curl_options["base_command"].copy()
         # Handle multiple headers (-H) and potentially other multi-value options
