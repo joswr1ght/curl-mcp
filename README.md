@@ -31,9 +31,9 @@ pip install -e .
 
 ## Configuración
 
-1. Copiar el archivo de configuración de ejemplo:
+1. Copiar el archivo de configuración 
 ```bash
-cp setting_example.json settings.json
+settings.json
 ```
 
 2. El servidor MCP ya está listo para usar.
