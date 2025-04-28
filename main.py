@@ -2,7 +2,7 @@ from mcp.server.fastmcp import FastMCP
 import subprocess
 import json
 import re
-from urllib.parse import urlparse # Mover import al inicio
+from urllib.parse import urlparse 
 
 mcp = FastMCP("curl-mcp")
 
