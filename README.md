@@ -27,14 +27,14 @@ source .env/bin/activate
 pip install -r requirements.txt
 ```
 
-4. Make the launcher script executable:
+4. Start the MCP server:
 ```bash
-chmod +x curl-mcp.sh
+python3 main.py
 ```
 
 ## Configuration
 
-To use this MCP server in your development environment (VSCode, Cursor, Claude Desktop, etc.), add the following configuration to your MCP settings:
+Add this to your MCP settings:
 
 ```json
 {
