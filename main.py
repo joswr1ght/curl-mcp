@@ -16,6 +16,9 @@ async def curl(instruction: str) -> str:
     Returns:
         The output of the curl command and the actual command executed.
     """
+    # Check if raw output is requested
+    raw_output = re.search(r'(?:raw|crudo|consola|terminal)', instruction, re.IGNORECASE)
+    
     # Parse the natural language instruction
     curl_options = parse_instruction(instruction)
     
@@ -25,8 +28,10 @@ async def curl(instruction: str) -> str:
     # Execute the parsed curl command
     result = execute_curl(curl_options)
     
-    # Return both the command executed and the result
-    return f"Command executed: {curl_options['command_string']}\n\nResult:\n{result}"
+    if raw_output:
+        return result
+    else:
+        return f"Command executed: {curl_options['command_string']}\n\nResult:\n{result}"
 
 def parse_instruction(instruction: str) -> dict:
     """Parse a natural language instruction into curl command options."""
