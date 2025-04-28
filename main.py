@@ -135,6 +135,26 @@ def parse_instruction(instruction: str) -> dict:
                 # Handle multiple data fields correctly (though curl usually takes one -d, use --data-urlencode for multiple)
                 # This simplistic approach overwrites previous -d if multiple matches occur.
                 curl_options["options"]["-d"] = data
+
+        # Enhanced data handling
+        data_patterns = [
+            (r'(?:datos|data|body)\s+desde\s+archivo\s+(["\']?)([^"\']+)\1', 'file'),
+            (r'(?:form|formulario)\s+(["\']?)([^"\']+)\1\s+(?:con|with)\s+archivo\s+(["\']?)([^"\']+)\3', 'form'),
+            (r'(?:urlencoded|encoded)\s+data\s+(["\']?)([^"\']+)\1', 'urlencoded')
+        ]
+        
+        for pattern, data_type in data_patterns:
+            data_match = re.search(pattern, instruction, re.IGNORECASE)
+            if data_match:
+                if data_type == 'file':
+                    curl_options["options"]["-d"] = f"@{data_match.group(2)}"
+                elif data_type == 'form':
+                    form_field = data_match.group(2)
+                    filename = data_match.group(4)
+                    curl_options["options"]["-F"] = f'{form_field}=@{filename}'
+                elif data_type == 'urlencoded':
+                    curl_options["options"]["--data-urlencode"] = data_match.group(2)
+                break
         
         # Detect user agent changes 
         ua_match = re.search(r'(?:user\s*agent|agente\s*de\s*usuario|como|as)\s+(iphone|android|chrome|firefox|safari)', instruction, re.IGNORECASE)
