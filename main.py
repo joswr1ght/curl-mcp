@@ -244,6 +244,20 @@ def parse_instruction(instruction: str) -> dict:
                 curl_options["display_options"]["-u"] = f"{username}:****"
                 break
 
+        # SSL and security options
+        if re.search(r'(?:ignora|ignore|skip|salta)\s+(?:ssl|certificado|certificate|verification)', instruction, re.IGNORECASE):
+            curl_options["options"]["-k"] = True
+        
+        # Timeout handling
+        timeout_match = re.search(r'(?:timeout|espera|límite)\s+(?:de\s+)?(\d+)\s*(?:s|seg|seconds|segundos)?', instruction, re.IGNORECASE)
+        if timeout_match:
+            curl_options["options"]["-m"] = timeout_match.group(1)
+
+        # Proxy support
+        proxy_match = re.search(r'(?:proxy|través\s+de|through)\s+(["\']?)([^"\']+:\d+)\1', instruction, re.IGNORECASE)
+        if proxy_match:
+            curl_options["options"]["-x"] = proxy_match.group(2)
+
         # --- Build the command string for display ---
         cmd_parts = curl_options["base_command"].copy()
         # Handle multiple headers (-H) and potentially other multi-value options
