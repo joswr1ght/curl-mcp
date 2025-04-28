@@ -3,7 +3,6 @@ import subprocess
 import json
 import re
 
-# Initialize FastMCP server
 mcp = FastMCP("curl-mcp")
 
 @mcp.tool()
@@ -79,7 +78,7 @@ def parse_instruction(instruction: str) -> dict:
                 curl_options["options"]["-H"] = "Content-Type: application/json"
             curl_options["options"]["-d"] = data
     
-    # Detect user agent changes - Simplified detection
+    # Detect user agent changes 
     if re.search(r'(?:user\s*agent|agente)', instruction, re.IGNORECASE):
         # Common user agents
         user_agents = {
@@ -112,7 +111,7 @@ def parse_instruction(instruction: str) -> dict:
         # Use -i to include headers with body
         curl_options["options"]["-i"] = True
     
-    # Output to file if mentioned
+    
     if re.search(r'(?:save|guardar|salvar|file|archivo)', instruction, re.IGNORECASE):
         file_match = re.search(r'(?:as|como|to|en)[:\s]+([^\s"\'<>,]+\.[\w]+)', instruction, re.IGNORECASE)
         if file_match:
@@ -162,12 +161,17 @@ def execute_curl(curl_options: dict) -> str:
             check=False
         )
         
-        if result.returncode == 0:
-            return result.stdout
-        else:
-            # Try again with simplified options if it failed
+        # Always return both stdout and stderr, regardless of return code
+        output = []
+        if result.stdout:
+            output.append(f"Output:\n{result.stdout}")
+        if result.stderr:
+            output.append(f"Error output:\n{result.stderr}")
+        if result.returncode != 0:
+            output.append(f"Exit code: {result.returncode}")
+            
+            
             if len(curl_options["options"]) > 0:
-                # Keep only the method and URL for retry
                 simple_options = {}
                 if "-X" in curl_options["options"]:
                     simple_options["-X"] = curl_options["options"]["-X"]
@@ -178,17 +182,20 @@ def execute_curl(curl_options: dict) -> str:
                     simple_curl_command.append(str(value))
                 simple_curl_command.append(curl_options["url"])
                 
-                result = subprocess.run(
+                retry_result = subprocess.run(
                     simple_curl_command,
                     capture_output=True,
                     text=True,
                     check=False
                 )
                 
-                if result.returncode == 0:
-                    return f"Initial attempt failed. Simplified and succeeded:\n{result.stdout}"
-            
-            return f"Error (code {result.returncode}):\n{result.stderr}"
+                if retry_result.returncode == 0:
+                    output.append("\nRetry with simplified command succeeded:")
+                    if retry_result.stdout:
+                        output.append(retry_result.stdout)
+        
+        return "\n".join(output)
+        
     except Exception as e:
         return f"Exception occurred: {str(e)}"
 
