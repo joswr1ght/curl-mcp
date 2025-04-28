@@ -26,7 +26,7 @@ source .venv/bin/activate  # En Linux/macOS
 
 3. Instalar las dependencias:
 ```bash
-pip install -e .
+pip install -r requirements.txt
 ```
 
 ## Configuración
