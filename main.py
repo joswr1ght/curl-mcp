@@ -20,11 +20,7 @@ async def curl(instruction: str) -> str:
     curl_options = parse_instruction(instruction)
     
     # Add common options that should be enabled by default
-    # -L to follow redirects automatically
-    curl_options["options"]["-L"] = True
-    # Only add -i if we're not doing a HEAD request (-I/--head)
-    if not any(opt in curl_options["options"] for opt in ["-I", "--head"]):
-        curl_options["options"]["-i"] = True
+    curl_options["options"]["-L"] = True  # Follow redirects
     
     # Execute the parsed curl command
     result = execute_curl(curl_options)
