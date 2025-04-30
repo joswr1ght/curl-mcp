@@ -32,6 +32,8 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
+<img src="./demo.png" width="auto" height="auto" alt="demo">
+
 ## Configuration
 
 Add this to your MCP settings:
