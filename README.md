@@ -32,7 +32,7 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
-<img src="./demo.png" width="auto" height="auto" alt="demo">
+<img src="./demo.png" width="70%" height="70%" alt="demo">
 
 ## Configuration
 
