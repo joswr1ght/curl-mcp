@@ -501,18 +501,15 @@ async def create_sse_server(host: str, port: int):
                 # Listen for responses to send back
                 while True:
                     try:
-                        # Wait for response with timeout
-                        response = await asyncio.wait_for(response_queue.get(), timeout=30.0)
+                        # Wait for response without timeout (blocking)
+                        response = await response_queue.get()
                         yield {
                             "event": "message",
                             "data": json.dumps(response)
                         }
-                    except asyncio.TimeoutError:
-                        # Send heartbeat if no response within timeout
-                        yield {
-                            "event": "ping",
-                            "data": ""
-                        }
+                    except Exception:
+                        # Break on any error to close the connection
+                        break
 
             except Exception as e:
                 logger.error(f"SSE connection error: {e}")
