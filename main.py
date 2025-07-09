@@ -61,6 +61,8 @@ def build_curl_command_list(options: dict, url: str) -> list:
     Builds the list of arguments for subprocess from options dict.
     """
     command = ["curl"]
+    if options is None:
+        options = {}
     for option, value in options.items():
         if isinstance(value, list):  # Handle options that appear multiple times (e.g., -H)
             for item in value:
@@ -98,11 +100,16 @@ async def curl(instruction: str) -> str:
             return f"Error parsing instruction: {curl_options_data['error']}\nInstruction: {instruction}"
 
         # Use display_options for the command string shown to the user
-        options_for_display = curl_options_data.get("display_options", curl_options_data["options"])
+        options_for_display = curl_options_data.get("display_options", curl_options_data.get("options", {}))
+        if options_for_display is None:
+            options_for_display = {}
         command_string_display = " ".join(build_curl_command_list(options_for_display, curl_options_data["url"]))
 
         # Execute the parsed curl command using the real options
-        execution_result = execute_curl(curl_options_data["options"], curl_options_data["url"])
+        options_for_execution = curl_options_data.get("options", {})
+        if options_for_execution is None:
+            options_for_execution = {}
+        execution_result = execute_curl(options_for_execution, curl_options_data["url"])
 
         # Combine command display with execution result
         if raw_output:
